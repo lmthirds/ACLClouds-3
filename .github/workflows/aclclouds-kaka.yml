@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  secrets: write        # gh CLI 把浏览器登录拿到的新 Cookie 写回 ACL_COOKIES Secret
+
 
 jobs:
   renew:
