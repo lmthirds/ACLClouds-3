@@ -13,7 +13,7 @@ permissions:
 jobs:
   renew:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: 检出代码
@@ -36,7 +36,9 @@ jobs:
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
-          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
+          bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh) || echo "⚠️ setup_proxy.sh failed"
+          echo "=== proxy port check ==="
+          (ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -E '1080|10808' || echo "⚠️ 1080/10808 NOT listening (浏览器将回退直连)"
 
       - name: 执行续期
         env:
@@ -50,4 +52,21 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         # xvfb-run 提供虚拟显示器, uc_gui_click_captcha 的 GUI 点击才能工作
-        run: xvfb-run --auto-servernum python renew_fixed.py
+        # pipefail 让 python 的退出码决定 step 成败; tee 把全程日志存 renew.log
+        run: |
+          set -o pipefail
+          xvfb-run --auto-servernum python renew_fixed.py 2>&1 | tee renew.log
+
+      - name: 上传诊断文件 (日志 + 截图, 失败时用于排障)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acl-diag
+          path: |
+            renew.log
+            acl_login_form.png
+            acl_login_form.html
+            acl_login_failed.png
+            acl_discord_no_redirect.png
+          if-no-files-found: ignore
+          retention-days: 3
