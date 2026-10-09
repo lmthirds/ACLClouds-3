@@ -1025,17 +1025,18 @@ def process_account(label, cookie_str):
             if isinstance(c, dict) and c.get("auto_renew") is not None:
                 auto_renew = bool(c.get("auto_renew"))
                 break
+        _exp_sfx = f" | 到期 {expire_str}" if expire_str else ""
         if auto_renew:
             log(f"  ⏭️ {name}: 面板已开启自动续期 (auto_renew=true), 无需脚本处理")
-            skipped.append(f"⏭️ {name}: auto_renew=true (面板自动续期)")
+            skipped.append(f"⏭️ {name}: auto_renew=true (面板自动续期){_exp_sfx}")
             continue
         if can_renew is False:
             log(f"  ⏭️ {name}: {reason or '不可续期'}")
-            skipped.append(f"⏭️ {name}: {reason or '不可续期'}")
+            skipped.append(f"⏭️ {name}: {reason or '不可续期'}{_exp_sfx}")
             continue
         if can_renew is True and free_left == 0:
             log(f"  ⏭️ {name}: 免费续期次数已用完 (free_renewals_remaining=0)")
-            skipped.append(f"⏭️ {name}: 免费续期次数已用完")
+            skipped.append(f"⏭️ {name}: 免费续期次数已用完{_exp_sfx}")
             continue
 
         if not expire_str:
@@ -1057,7 +1058,7 @@ def process_account(label, cookie_str):
         if remaining_h < RENEW_THRESHOLD_HOURS:
             to_renew.append({"id": sid, "name": name, "remaining": remaining})
         else:
-            skipped.append(f"⏭️ {name}: 剩 {fmt_remaining(remaining)}, 未到阈值 {RENEW_THRESHOLD_HOURS:g}h")
+            skipped.append(f"⏭️ {name}: 剩 {fmt_remaining(remaining)}, 未到阈值 {RENEW_THRESHOLD_HOURS:g}h | 到期 {expire_str}")
 
     if not to_renew:
         msg = f"所有服务器剩余时间充足, 无需续期" if not skipped else f"无需续期 ({len(skipped)} 台跳过)"
@@ -1104,7 +1105,7 @@ def process_account(label, cookie_str):
                     new_expire = parse_iso(new_expire_str) if new_expire_str else None
                     if new_expire:
                         new_remaining = (new_expire - now).total_seconds()
-                        results.append(f"✅ {srv['name']}: {fmt_remaining(srv['remaining'])} → {fmt_remaining(new_remaining)}")
+                        results.append(f"✅ {srv['name']}: {fmt_remaining(srv['remaining'])} → {fmt_remaining(new_remaining)} | 到期 {new_expire_str}")
                         log(f"✅ 续期成功: {fmt_remaining(srv['remaining'])} → {fmt_remaining(new_remaining)}")
                     else:
                         results.append(f"✅ {srv['name']}: 续期成功")
