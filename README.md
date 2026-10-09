@@ -33,7 +33,7 @@
 
 | Secret 名称 | 必填 | 说明 |
 | --- | --- | --- |
-| `ACL_COOKIES` | ✅ 兜底 | 单账号 Cookie, 格式: `XSRF-TOKEN=<值>; __Host-aclclouds_session=<值>` |
+| `ACL_COOKIES` | ✅ 兜底 | 单账号 Cookie, 格式: XSRF-TOKEN=<第1步复制的值>; __Host-aclclouds_session=<第2步复制的值> |
 | `ACL_ACCOUNTS` | 多账号 | 格式: `name1\|\|\|cookie1\nname2\|\|\|cookie2` (每行一个) |
 | `ACL_EMAIL` + `ACL_PASSWORD` | 免换Cookie | aclclouds 登录邮箱/密码, 开启**浏览器自动登录** |
 | `NODE_LINK` | 浏览器登录 | 住宅/原生代理节点 (过 Turnstile 需要干净 IP) |
