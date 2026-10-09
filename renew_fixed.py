@@ -20,6 +20,11 @@ ACLClouds 自动续期脚本 - 适配 2026-09 aclclouds.com 改版
     export TG_BOT_TOKEN=...  TG_CHAT_ID=...   # 可选
     export DEBUG=1                             # 可选, 打印原始响应
     python renew_fixed.py
+
+浏览器自动登录 (免手动换 Cookie):
+    export ACL_EMAIL=you@example.com ACL_PASSWORD=xxx
+    export IS_PROXY=true PROXY_SERVER=socks5://127.0.0.1:1080
+    需要 seleniumbase; 过 CF Turnstile 需要干净代理。
 """
 
 import os
@@ -67,6 +72,19 @@ GH_REPO = os.environ.get("GH_REPO", "weikkadd/ACLClouds-server").strip()
 
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+# 登录表单选择器 (覆盖 Pterodactyl/Persepolis 各版本 + 本地化 placeholder)
+EMAIL_SELECTORS = (
+    'input[name="email"]', 'input[type="email"]', 'input[autocomplete="email"]',
+    'input[name="login"]', 'input[name="identifier"]', 'input[name="username"]',
+    'input[placeholder*="example.com" i]', 'input[placeholder*="email" i]',
+    'input[placeholder*="邮箱"]', 'input[id="email"]',
+)
+PASSWORD_SELECTORS = (
+    'input[type="password"]', 'input[name="password"]',
+    'input[autocomplete="current-password"]', 'input[placeholder*="password" i]',
+    'input[placeholder*="密码"]', 'input[id="password"]',
+)
 
 
 # ==================== 工具函数 ====================
@@ -373,8 +391,42 @@ def renew_error_msg(r):
 
 
 # ==================== 浏览器自动登录 (SeleniumBase, 免手动换 Cookie) ====================
+def _cf_challenge(sb):
+    """检测是否处于 Cloudflare 验证页 (该页没有真实登录表单, 只有 CF 挑战 UI)"""
+    try:
+        url = (sb.get_current_url() or "").lower()
+        if "/cdn-cgi" in url or "challenge" in url:
+            return True
+    except Exception:
+        pass
+    try:
+        title = (sb.get_title() or "").lower()
+        if any(k in title for k in ("just a moment", "attention required",
+                                     "checking your browser", "verify you are")):
+            return True
+    except Exception:
+        pass
+    try:
+        src = (sb.get_page_source() or "")[:5000].lower()
+        if "cf-challenge" in src or "challenge-platform" in src:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _dump_login_form(sb):
-    """诊断: 打印登录页可见的表单元素"""
+    """诊断: 打印登录页 CF 状态 / URL / 可见表单元素, 便于排障"""
+    url = title = ""
+    cf = False
+    try:
+        url = sb.get_current_url()
+        title = sb.get_title() or ""
+        cf = _cf_challenge(sb)
+    except Exception:
+        pass
+    print(f"🔍 登录表单诊断 | CF验证: {'是' if cf else '否'} | title: {title[:60]}")
+    print(f"   URL: {url}")
     try:
         els = sb.execute_script("""
             (function(){
@@ -387,9 +439,17 @@ def _dump_login_form(sb):
                     .slice(0, 25);
             })()
         """)
-        print("🔍 登录表单元素:")
-        for x in els or []:
-            print("   ", x)
+        if els:
+            print("   可见 input/button:")
+            for x in els:
+                print("   ", x)
+        else:
+            print("   ⚠️ 无可见 input/button — CF 验证页 / SPA 未渲染 / 表单结构已变")
+            try:
+                body_text = (sb.get_text("body") or "").strip().replace("\n", " ")[:300]
+                print("   body 片段:", body_text)
+            except Exception:
+                pass
     except Exception as e:
         print(f"⚠️ 枚举登录表单失败: {e}")
 
@@ -426,7 +486,7 @@ def _click_turnstile(sb):
 
 
 def _discord_oauth_login(sb):
-    """Discord OAuth 登录回退 (账号需绑定 Discord; Turnstile 不可用时自动使用)
+    """Discord OAuth 登录回退 (账号需绑定 Discord; Turnstile 组件加载不出时自动使用)
 
     流程: 点登录页 Discord 按钮 → 抓 authorize URL (client_id/state/redirect_uri)
     → 用 Discord token 完成授权拿 code → 浏览器打开回调 → 提取 cookie。
@@ -577,7 +637,7 @@ def _discord_oauth_login(sb):
 def browser_login():
     """用浏览器登录 aclclouds.com, 返回 Cookie 字符串; 失败返回 None
 
-    流程: 打开 /auth/login → 填账密 → 过 Turnstile → 提交 → 等跳转 → 取 cookie
+    流程: 打开 /auth/login → 等表单渲染 (兼容 CF 验证) → 填账密 → 过 Turnstile → 提交 → 取 cookie
     需要: pip install seleniumbase; 过 Turnstile 需要干净代理 (IS_PROXY=true)。
     """
     if not ACL_EMAIL or not ACL_PASSWORD:
@@ -601,44 +661,64 @@ def browser_login():
         with SB(**kwargs) as sb:
             sb.open("https://aclclouds.com/auth/login")
             sb.wait_for_ready_state_complete()
-            sb.sleep(3)
-            log(f"📝 当前 URL: {sb.get_current_url()}")
-            _dump_login_form(sb)
 
-            # 填邮箱
-            email_filled = False
-            for sel in ('input[name="email"]', 'input[type="email"]',
-                        'input[autocomplete="email"]', 'input[placeholder*="example.com"]'):
-                try:
-                    if sb.is_element_visible(sel):
-                        sb.type(sel, ACL_EMAIL)
-                        email_filled = True
-                        log(f"✅ 已填写邮箱: {sel}")
-                        break
-                except Exception:
+            # ===== 轮询等待登录表单出现 (兼容 CF 验证页 + SPA 慢渲染), 最长 60s =====
+            email_sel = pw_sel = None
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                cur_url = sb.get_current_url()
+                log(f"📝 当前 URL: {cur_url}")
+
+                if _cf_challenge(sb):
+                    log("🛡️ 检测到 Cloudflare 验证页, 等待通过...")
+                    sb.sleep(5)
                     continue
 
-            # 填密码
-            pw_filled = False
-            for sel in ('input[name="password"]', 'input[type="password"]',
-                        'input[autocomplete="current-password"]'):
-                try:
-                    if sb.is_element_visible(sel):
-                        sb.type(sel, ACL_PASSWORD)
-                        pw_filled = True
-                        log(f"✅ 已填写密码: {sel}")
-                        break
-                except Exception:
-                    continue
+                if email_sel is None:
+                    for sel in EMAIL_SELECTORS:
+                        try:
+                            if sb.is_element_visible(sel):
+                                email_sel = sel
+                                break
+                        except Exception:
+                            continue
 
-            if not (email_filled and pw_filled):
-                log("❌ 未找到邮箱/密码输入框 (表单结构可能已变)")
+                if pw_sel is None:
+                    for sel in PASSWORD_SELECTORS:
+                        try:
+                            if sb.is_element_visible(sel):
+                                pw_sel = sel
+                                break
+                        except Exception:
+                            continue
+
+                if email_sel and pw_sel:
+                    log(f"✅ 找到登录表单: 邮箱={email_sel} 密码={pw_sel}")
+                    break
+
+                elapsed = int(60 - (deadline - time.time()))
+                log(f"⏳ 表单未出现 (已等 {elapsed}s / 60s)")
+                _dump_login_form(sb)
+                sb.sleep(3)
+
+            if not (email_sel and pw_sel):
+                log("❌ 60s 内未找到邮箱/密码输入框")
+                log("   可能原因: CF 验证未通过 / 登录页结构已变 / 代理 IP 被风控")
                 _dump_login_form(sb)
                 try:
                     sb.save_screenshot("acl_login_form.png")
+                    with open("acl_login_form.html", "w", encoding="utf-8") as f:
+                        f.write(sb.get_page_source())
+                    print("   📸 已保存 acl_login_form.png + .html 供排障")
                 except Exception:
                     pass
                 return None
+
+            # 填写邮箱 + 密码
+            sb.type(email_sel, ACL_EMAIL)
+            log(f"✅ 已填写邮箱: {email_sel}")
+            sb.type(pw_sel, ACL_PASSWORD)
+            log(f"✅ 已填写密码: {pw_sel}")
 
             # Turnstile: 先等组件 iframe 出现, 再点击直到 token 真正生成
             log("🔒 尝试通过 Turnstile 验证...")
@@ -657,8 +737,8 @@ def browser_login():
                 try:
                     sb.driver.switch_to.default_content()
                     tok = sb.driver.execute_script(
-                        "var el=document.querySelector('textarea[name=\"cf-turnstile-response\"],"
-                        "input[name=\"cf-turnstile-response\"]');"
+                        "var el=document.querySelector('textarea[name=\\"cf-turnstile-response\\"],"
+                        "input[name=\\"cf-turnstile-response\\"]');"
                         "return !!(el&&el.value&&el.value.length>10);")
                     if tok:
                         return True
@@ -714,7 +794,8 @@ def browser_login():
                 submit_ok = False
                 for sel in ('button[type="submit"]',
                             'button:contains("Sign in")', 'button:contains("Login")',
-                            'button:contains("Se connecter")', 'button:contains("Connexion")'):
+                            'button:contains("Se connecter")', 'button:contains("Connexion")',
+                            'button:contains("登录")', 'button:contains("Sign In")'):
                     try:
                         if sb.is_element_visible(sel):
                             sb.click(sel)
@@ -783,6 +864,17 @@ def browser_login():
                 return None
             cookie = f"XSRF-TOKEN={xsrf}; __Host-aclclouds_session={session}"
             log(f"✅ 浏览器登录完成, 已获取新 Cookie (session 前 8 位: {session[:8]}...)")
+
+            # 验证新 Cookie 是否可用 (防止拿到脏会话)
+            try:
+                vs = build_api_session(cookie)
+                vr = api_get(vs, "/api/client")
+                if vr.status_code == 200:
+                    log("✅ 新 Cookie 验证通过 (/api/client -> 200)")
+                else:
+                    log(f"⚠️ 新 Cookie 自检: /api/client -> HTTP {vr.status_code} (仍返回 Cookie, 请手动确认)")
+            except Exception as ve:
+                log(f"⚠️ Cookie 自检异常: {ve}")
             return cookie
     except Exception as e:
         log(f"💥 浏览器登录异常: {e}")
@@ -807,7 +899,12 @@ def update_acl_secret(cookie_str):
         if proc.returncode == 0:
             log("✅ ACL_COOKIES 更新成功")
             return True
-        log(f"❌ 更新失败: {proc.stderr.strip()[:200]}")
+        stderr = proc.stderr.strip()
+        if "403" in stderr or "forbidden" in stderr.lower():
+            log(f"❌ 更新失败 (403 无权限): {stderr[:200]}")
+            log("   请确认 GH_TOKEN 有 secrets 写权限 (PAT 需 admin:repo 权限, 或 workflow 加 secrets: write)")
+        else:
+            log(f"❌ 更新失败: {stderr[:200]}")
         return False
     except Exception as e:
         log(f"❌ 更新 Secret 异常: {e}")
@@ -1075,7 +1172,8 @@ def main():
                    "请检查:\n"
                    "- ACL_EMAIL/ACL_PASSWORD 是否正确\n"
                    "- 代理能否过 Turnstile (IS_PROXY=true + 干净代理)\n"
-                   "- 是否触发 2FA (需手动处理)")
+                   "- 是否触发 2FA (需手动处理)\n"
+                   "- 查看 acl_login_form.png / .html 截图排障")
             log(msg)
             send_tg(msg)
             sys.exit(1)
@@ -1107,6 +1205,7 @@ def main():
                         update_acl_secret(fresh)
                 else:
                     log("⚠️ 浏览器登录失败, 维持 401 结果")
+                    log("   请手动登录 https://aclclouds.com/dashboard 复制新 Cookie 更新 ACL_COOKIES")
         except Exception as e:
             res = {"label": label, "ok": False, "msg": f"异常: {e}", "renewed": 0, "failed": 1}
         all_results.append(res)
