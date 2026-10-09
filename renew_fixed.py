@@ -968,6 +968,12 @@ def process_account(label, cookie_str):
         log("   2) Cookie 是从 dash.aclclouds.com 复制的旧会话 -> 必须从 aclclouds.com 复制")
         log("   3) ACL_BASE_URL 指向了 dash.aclclouds.com -> 改回 https://aclclouds.com")
         log(f"   响应: {test_r.text[:300]}")
+        _raw = getattr(session, '_raw_cookie', '')
+        _xsrf = get_xsrf(session)
+        log(f"   🔍 Cookie 诊断: 原始长度={len(cookie_str)} 清洗后={len(_raw)}")
+        log(f"      有XSRF-TOKEN={'XSRF-TOKEN=' in _raw} 有session={'__Host-aclclouds_session=' in _raw or '__Host-aclouds_session=' in _raw}")
+        log(f"      XSRF提取={'成功' if _xsrf else '失败'} (前8位={(_xsrf or '')[:8]})")
+        log(f"      Cookie前40位={_raw[:40]}")
         return {"label": label, "ok": False, "msg": "登录失败 HTTP 401 (Cookie 无效/过期/域名不匹配)", "renewed": 0, "failed": 0}
     elif test_r.status_code == 403:
         log("❌ 登录失败: HTTP 403")
