@@ -651,20 +651,31 @@ def browser_login():
 
     kwargs = {"uc": True, "headless": HEADLESS}
     if IS_PROXY:
-        # 代理健康检查: TCP 连接目标端口, 防止 sing-box 未起来时浏览器全部超时
+        # 代理健康检查: TCP 端口 + 实际转发能力 (sing-box VLESS 断连时端口仍监听但无法转发)
         import socket
         import urllib.parse as _up
         _pm = _up.urlsplit(PROXY_SERVER)
         _p_host = _pm.hostname or "127.0.0.1"
         _p_port = _pm.port or 1080
+        proxy_ok = False
         try:
             _sock = socket.create_connection((_p_host, _p_port), timeout=5)
             _sock.close()
-            log(f"🔗 代理 {_p_host}:{_p_port} 健康, 浏览器走代理: {PROXY_SERVER}")
-            kwargs["proxy"] = PROXY_SERVER
+            try:
+                _test = requests.get("https://aclclouds.com",
+                                     proxies={"https": PROXY_SERVER, "http": PROXY_SERVER},
+                                     timeout=10, allow_redirects=False)
+                log(f"🔗 代理 {_p_host}:{_p_port} 健康 (转发测试 HTTP {_test.status_code}), 浏览器走代理")
+                proxy_ok = True
+            except Exception as _te:
+                log(f"⚠️ 代理端口在监听但转发失败 ({_te}), 回退直连")
+                log("   (sing-box VLESS 节点可能不可用, 检查 NODE_LINK secret)")
         except Exception as _pe:
             log(f"⚠️ 代理 {_p_host}:{_p_port} 不可达 ({_pe}), 回退直连")
             log("   (若 sing-box 未起来, 请检查 Actions 日志 setup_proxy.sh 步骤)")
+        if proxy_ok:
+            kwargs["proxy"] = PROXY_SERVER
+        else:
             kwargs.pop("proxy", None)
     else:
         log("🌐 浏览器直连 (Turnstile 过不去时请设 IS_PROXY=true + 干净代理)")
